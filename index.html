@@ -137,7 +137,7 @@ footer { margin-top: 60px; padding: 24px 0; border-top: 1px solid #222; color: v
 <strong>LVM snapshot COW is catastrophically slow for random writes.</strong> Each 4KB write becomes: Read old block &rarr; Write to COW area &rarr; Write new data. Three serial I/Os at QD=1 = 37x slowdown. The green dots (reads) appearing after the snapshot are the COW source reads.
 </div>
 
-<p>Thin snapshots barely notice. Since dm-thin already uses COW internally (redirect-on-write), a snapshot just means old block pointers are preserved in the metadata tree. No extra read or copy is needed.</p>
+<p>Thin snapshots use <strong>Redirect-On-Write (ROW)</strong> &mdash; instead of copying old data, new data goes to a fresh location and the metadata pointer is updated. However, look closely at the thin panel after the snapshot: there are <strong>green dots (reads)</strong> appearing. dm-thin's chunk size is 64KB, but fio writes 4KB. When a 4KB write hits a shared 64KB chunk, dm-thin must read the entire chunk, copy it to a new location, then apply the 4KB change &mdash; effectively COW at the chunk level. If the chunk size matched the write size (e.g. <code>lvcreate -T ... -c 4k</code>), these reads would disappear entirely.</p>
 
 <!-- ============================================================ -->
 <h2>Experiment 3: ZFS vs Btrfs &mdash; COW Filesystems</h2>
