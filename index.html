@@ -134,7 +134,11 @@ footer { margin-top: 60px; padding: 24px 0; border-top: 1px solid #222; color: v
 </table>
 
 <div class="callout danger">
-<strong>LVM snapshot COW is catastrophically slow for random writes.</strong> Each 4KB write becomes: Read old block &rarr; Write to COW area &rarr; Write new data. Three serial I/Os at QD=1 = 37x slowdown. The green dots (reads) appearing after the snapshot are the COW source reads.
+<strong>LVM snapshot COW is catastrophically slow for random writes.</strong> Each 4KB write becomes a 6-step sequence: Read old block &rarr; Write to COW area &rarr; <strong>Flush</strong> &rarr; Write COW mapping table &rarr; <strong>Flush</strong> &rarr; Write new data. The two flushes (write barriers) ensure that the COW mapping is persisted before the original block is overwritten &mdash; without them, a crash could corrupt the snapshot. At QD=1, these 6 serial I/Os produce a 37x slowdown. The green dots (reads) are the COW source reads.
+</div>
+
+<div class="callout">
+<strong>Why don't other snapshot implementations flush on every write?</strong> dm-thin and ZFS/Btrfs batch metadata updates into periodic transaction commits (dm-thin ~1s, ZFS ~5s, Btrfs ~30s). This means a crash could lose the last few seconds of writes, but snapshots remain consistent because the metadata is updated atomically at commit time. dm-snapshot chose the safer but slower path: every single COW operation is immediately persisted. An <code>fsync()</code> from the application would trigger a commit on the batched systems too, but fio with <code>O_DIRECT</code> alone does not force one.
 </div>
 
 <p>Thin snapshots use <strong>Redirect-On-Write (ROW)</strong> &mdash; instead of copying old data, new data goes to a fresh location and the metadata pointer is updated. However, look closely at the thin panel after the snapshot: there are <strong>green dots (reads)</strong> appearing. dm-thin's chunk size is 64KB, but fio writes 4KB. When a 4KB write hits a shared 64KB chunk, dm-thin must read the entire chunk, copy it to a new location, then apply the 4KB change &mdash; effectively COW at the chunk level. If the chunk size matched the write size (e.g. <code>lvcreate -T ... -c 4k</code>), these reads would disappear entirely.</p>
@@ -326,6 +330,7 @@ function createViz(containerId, opts) {
   let idxL = 0, idxR = 0, maxTime = 0;
   let countsL = {}, countsR = {}, sectorsL = 0, sectorsR = 0;
   let lMinS, lMaxS, rMinS, rMaxS;
+  let lMinSBase, lMaxSBase, rMinSBase, rMaxSBase; // original ranges for reset
   let snapTimes = [];
 
   function resetState() {
@@ -342,8 +347,8 @@ function createViz(containerId, opts) {
     const lStart = dataL[0].t; dataL.forEach(e => e.t -= lStart);
     const rStart = dataR[0].t; dataR.forEach(e => e.t -= rStart);
     maxTime = Math.max(dataL[dataL.length-1].t, dataR[dataR.length-1].t);
-    [lMinS, lMaxS] = mmx(dataL);
-    [rMinS, rMaxS] = mmx(dataR);
+    [lMinS, lMaxS] = mmx(dataL); lMinSBase = lMinS; lMaxSBase = lMaxS;
+    [rMinS, rMaxS] = mmx(dataR); rMinSBase = rMinS; rMaxSBase = rMaxS;
     snapTimes = detectAllGaps(dataL, dataR);
     resize();
     requestAnimationFrame(animate);
@@ -375,6 +380,52 @@ function createViz(containerId, opts) {
     cvTL.getContext('2d').setTransform(dpr,0,0,dpr,0,0);
   }
   window.addEventListener('resize', resize);
+
+  // Y-axis zoom (wheel) and pan (drag) for each panel
+  function addZoomPan(cv, getRange, setRange, getBase) {
+    cv.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const [minS, maxS] = getRange();
+      const rect = cv.getBoundingClientRect();
+      const yFrac = (e.clientY - rect.top) / rect.height;
+      const pivot = minS + (maxS - minS) * yFrac;
+      const factor = e.deltaY > 0 ? 1.15 : 0.87; // zoom out / in
+      const newMin = pivot - (pivot - minS) * factor;
+      const newMax = pivot + (maxS - pivot) * factor;
+      setRange(newMin, newMax);
+    }, {passive: false});
+
+    let dragging = false, dragStartY = 0, dragMinS = 0, dragMaxS = 0;
+    cv.addEventListener('mousedown', (e) => {
+      dragging = true; dragStartY = e.clientY;
+      [dragMinS, dragMaxS] = getRange();
+      cv.style.cursor = 'grabbing';
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const rect = cv.getBoundingClientRect();
+      const dy = (e.clientY - dragStartY) / rect.height;
+      const range = dragMaxS - dragMinS;
+      setRange(dragMinS - dy * range, dragMaxS - dy * range);
+    });
+    window.addEventListener('mouseup', () => { dragging = false; cv.style.cursor = 'default'; });
+
+    cv.addEventListener('dblclick', () => {
+      const [bMin, bMax] = getBase();
+      setRange(bMin, bMax);
+    });
+  }
+
+  addZoomPan(panelL.cv,
+    () => [lMinS, lMaxS],
+    (a, b) => { lMinS = a; lMaxS = b; },
+    () => [lMinSBase, lMaxSBase]
+  );
+  addZoomPan(panelR.cv,
+    () => [rMinS, rMaxS],
+    (a, b) => { rMinS = a; rMaxS = b; },
+    () => [rMinSBase, rMaxSBase]
+  );
 
   let lastFrame = 0;
   function animate(ts) {
