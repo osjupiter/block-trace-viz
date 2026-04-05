@@ -291,16 +291,16 @@ function createViz(containerId, opts) {
   const lblSpeed = document.createElement('label');
   lblSpeed.textContent = 'Speed:';
   const sliderSpeed = document.createElement('input');
-  sliderSpeed.type = 'range'; sliderSpeed.min = 1; sliderSpeed.max = 100; sliderSpeed.value = 8;
+  sliderSpeed.type = 'range'; sliderSpeed.min = 1; sliderSpeed.max = 100; sliderSpeed.value = 1;
   const spanSpeed = document.createElement('span');
-  spanSpeed.textContent = '8x';
+  spanSpeed.textContent = '1x';
   controls.append(lblSpeed, sliderSpeed, spanSpeed);
 
-  const lblTrail = document.createElement('label');
-  lblTrail.textContent = 'Trail:';
-  const sliderTrail = document.createElement('input');
-  sliderTrail.type = 'range'; sliderTrail.min = 5; sliderTrail.max = 100; sliderTrail.value = 20;
-  controls.append(lblTrail, sliderTrail);
+  const lblWindow = document.createElement('label');
+  lblWindow.textContent = 'Window:';
+  const sliderWindow = document.createElement('input');
+  sliderWindow.type = 'range'; sliderWindow.min = 5; sliderWindow.max = 100; sliderWindow.value = 100;
+  controls.append(lblWindow, sliderWindow);
 
   // Sync zoom toggle
   let syncZoom = false;
@@ -365,7 +365,7 @@ function createViz(containerId, opts) {
 
   // State
   let dataL = [], dataR = [];
-  let playing = true, currentTime = 0, speedMult = 8, trailSec = 0.2;
+  let playing = true, currentTime = 0, speedMult = 1, trailSec = 1.0;
   let idxL = 0, idxR = 0, maxTime = 0;
   let countsL = {}, countsR = {}, sectorsL = 0, sectorsR = 0;
   let lMinS, lMaxS, rMinS, rMaxS;
@@ -401,14 +401,18 @@ function createViz(containerId, opts) {
   btnPause.onclick = () => { playing = false; btnPause.classList.add('active'); btnPlay.classList.remove('active'); };
   btnReset.onclick = () => { resetState(); playing = true; btnPlay.classList.add('active'); btnPause.classList.remove('active'); };
   sliderSpeed.oninput = () => { speedMult = +sliderSpeed.value; spanSpeed.textContent = speedMult + 'x'; };
-  sliderTrail.oninput = () => { trailSec = +sliderTrail.value / 100; };
-  cvTL.onclick = (e) => {
+  sliderWindow.oninput = () => { trailSec = +sliderWindow.value / 100; };
+  function seekTo(clientX) {
     const rect = cvTL.getBoundingClientRect();
-    currentTime = ((e.clientX - rect.left) / rect.width) * maxTime;
+    currentTime = Math.max(0, Math.min(maxTime, ((clientX - rect.left) / rect.width) * maxTime));
     idxL = idxR = 0; countsL = {}; countsR = {}; sectorsL = sectorsR = 0;
     while (idxL < dataL.length && dataL[idxL].t <= currentTime) { const ev=dataL[idxL]; countsL[ev.type]=(countsL[ev.type]||0)+1; sectorsL+=ev.n; idxL++; }
     while (idxR < dataR.length && dataR[idxR].t <= currentTime) { const ev=dataR[idxR]; countsR[ev.type]=(countsR[ev.type]||0)+1; sectorsR+=ev.n; idxR++; }
-  };
+  }
+  let tlDragging = false;
+  cvTL.addEventListener('mousedown', (e) => { tlDragging = true; playing = false; btnPause.classList.add('active'); btnPlay.classList.remove('active'); seekTo(e.clientX); });
+  window.addEventListener('mousemove', (e) => { if (tlDragging) seekTo(e.clientX); });
+  window.addEventListener('mouseup', () => { tlDragging = false; });
 
   function resize() {
     const dpr = window.devicePixelRatio || 1;
