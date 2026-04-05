@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Visualizing Linux Block I/O: How LVM, ZFS, and Btrfs Actually Write to Disk</title>
+<style>
+:root {
+  --bg: #0c0c0c;
+  --bg2: #151515;
+  --bg3: #1a1a1a;
+  --fg: #d4d4d4;
+  --fg2: #888;
+  --accent: #0af;
+  --orange: #f80;
+  --red: #f44;
+  --green: #0f6;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; line-height: 1.7; }
+.container { max-width: 860px; margin: 0 auto; padding: 40px 24px; }
+h1 { font-size: 2em; line-height: 1.3; margin-bottom: 8px; color: #fff; }
+.subtitle { color: var(--fg2); font-size: 1.05em; margin-bottom: 40px; }
+h2 { font-size: 1.4em; margin: 48px 0 16px; color: #eee; border-bottom: 1px solid #222; padding-bottom: 8px; }
+h3 { font-size: 1.15em; margin: 32px 0 12px; color: #ccc; }
+p { margin-bottom: 16px; color: var(--fg); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code { background: var(--bg3); padding: 2px 6px; border-radius: 3px; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.9em; color: #ddd; }
+pre { background: var(--bg2); padding: 16px; border-radius: 6px; overflow-x: auto; margin: 16px 0; border: 1px solid #222; }
+pre code { background: none; padding: 0; font-size: 0.85em; }
+.callout { background: var(--bg2); border-left: 3px solid var(--accent); padding: 16px 20px; margin: 20px 0; border-radius: 0 6px 6px 0; }
+.callout.warn { border-left-color: var(--orange); }
+.callout.danger { border-left-color: var(--red); }
+.callout strong { color: #eee; }
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.9em; }
+th, td { padding: 8px 12px; border: 1px solid #222; text-align: left; }
+th { background: var(--bg2); color: #ccc; font-weight: 600; }
+td { color: var(--fg); }
+.num { text-align: right; font-family: 'JetBrains Mono', monospace; }
+
+/* Viz container */
+.viz-wrap { margin: 24px 0; border: 1px solid #222; border-radius: 6px; overflow: hidden; background: var(--bg); }
+.viz-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--bg2); border-bottom: 1px solid #222; flex-wrap: wrap; gap: 8px; }
+.viz-header .title { font-size: 0.85em; color: var(--fg2); font-weight: 600; }
+.viz-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.viz-controls button {
+  background: #222; color: #ccc; border: 1px solid #444; padding: 3px 10px;
+  cursor: pointer; font-family: inherit; font-size: 11px; border-radius: 3px;
+}
+.viz-controls button:hover { background: #333; }
+.viz-controls button.active { background: #333; border-color: var(--accent); color: var(--accent); }
+.viz-controls label { font-size: 11px; color: var(--fg2); }
+.viz-controls input[type=range] { width: 80px; }
+.viz-controls span { font-size: 11px; color: #aaa; }
+.viz-body { display: flex; height: 350px; }
+.viz-panel { flex: 1; position: relative; border-right: 1px solid #1a1a1a; }
+.viz-panel:last-child { border-right: none; }
+.viz-panel canvas { width: 100%; height: 100%; display: block; }
+.viz-panel-label {
+  position: absolute; top: 6px; left: 8px; font-size: 11px; font-weight: 600;
+  padding: 2px 6px; background: rgba(0,0,0,0.8); border-radius: 3px; z-index: 1;
+}
+.viz-panel-phase {
+  position: absolute; top: 6px; right: 8px; font-size: 11px;
+  padding: 2px 6px; background: rgba(0,0,0,0.8); border-radius: 3px; z-index: 1; color: var(--fg2);
+}
+.viz-panel-stats {
+  position: absolute; bottom: 6px; right: 8px; font-size: 10px; color: var(--fg2);
+  padding: 2px 6px; background: rgba(0,0,0,0.85); border-radius: 3px;
+  text-align: right; pointer-events: none; z-index: 1; line-height: 1.4;
+}
+.viz-timeline { height: 28px; border-top: 1px solid #222; }
+.viz-timeline canvas { width: 100%; height: 100%; display: block; cursor: pointer; }
+.viz-legend { display: flex; gap: 16px; padding: 6px 12px; font-size: 11px; color: var(--fg2); border-top: 1px solid #222; flex-wrap: wrap; }
+.viz-legend span::before { content:''; display:inline-block; width:8px; height:8px; margin-right:4px; vertical-align:middle; border-radius:1px; }
+.viz-legend .ws::before { background: #0af; }
+.viz-legend .w::before { background: #f50; }
+.viz-legend .wm::before { background: #fa0; }
+.viz-legend .r::before { background: #0f6; }
+.viz-legend .ra::before { background: #484; }
+
+footer { margin-top: 60px; padding: 24px 0; border-top: 1px solid #222; color: var(--fg2); font-size: 0.85em; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>Visualizing Linux Block I/O: How LVM, ZFS, and Btrfs Actually Write to Disk</h1>
+<p class="subtitle">Animated blktrace visualizations showing write amplification, COW behavior, and snapshot overhead across storage stacks.</p>
+
+<h2>What This Is</h2>
+<p>When you write 4KB to a file, how much actually hits the disk? The answer depends on your storage stack, and it can be surprising. We ran <code>fio</code> random writes through different Linux storage configurations inside a QEMU VM, captured every block I/O event with <code>blktrace</code>, and animated the results.</p>
+
+<p>Each dot in the visualizations below is a real I/O completion event. The Y axis shows the physical sector on disk, and dots flow left-to-right over time. You can see exactly where and when each write (or read) lands on the physical device.</p>
+
+<div class="callout">
+<strong>Experiment setup:</strong> QEMU/KVM VM with 4 vCPUs, 4GB RAM. Two 10GB virtio disks. I/O scheduler set to <code>none</code>, <code>fio</code> with <code>--iodepth=1 --direct=1</code> for deterministic ordering. All I/O captured via <code>blktrace</code> on the physical block device.
+</div>
+
+<!-- ============================================================ -->
+<h2>Experiment 1: LVM Linear vs dm-thin</h2>
+
+<p>The simplest comparison: a plain LVM logical volume (linear mapping) vs a thin-provisioned LV. Same random 4KB writes, same seed, same duration.</p>
+
+<div id="viz-basic" class="viz-wrap"></div>
+
+<table>
+<tr><th></th><th>Linear</th><th>Thin</th></tr>
+<tr><td>Write events</td><td class="num">171,284 WS</td><td class="num">78,400 WS + 29,844 W</td></tr>
+<tr><td>IOPS</td><td class="num">~17,000</td><td class="num">~10,500</td></tr>
+<tr><td>Extra I/O</td><td>None</td><td>~30k metadata writes (64KB chunks)</td></tr>
+</table>
+
+<p>Linear is almost 1:1 &mdash; fio writes 4KB, the disk gets 4KB. Thin provisioning adds <strong>metadata writes</strong> (orange dots) for every new chunk allocation. The thin pool uses 64KB chunks, so each first-time write to a chunk triggers a metadata update.</p>
+
+<p>The thin side also shows periodic <strong>~100ms pauses</strong> roughly every second. These are dm-thin's <strong>transaction commits</strong> &mdash; it batches metadata btree updates and flushes them to disk, blocking data I/O during the commit.</p>
+
+<!-- ============================================================ -->
+<h2>Experiment 2: LVM Snapshot &mdash; COW vs ROW</h2>
+
+<p>What happens when you take a snapshot and keep writing? LVM's classic snapshots (dm-snapshot) use <strong>Copy-on-Write</strong>: before overwriting a block, it reads the old data and copies it to a COW area. Thin snapshots use <strong>Redirect-on-Write</strong>: new data simply goes to a new location.</p>
+
+<div id="viz-snap" class="viz-wrap"></div>
+
+<p>The difference is dramatic. After the snapshot:</p>
+
+<table>
+<tr><th></th><th>Linear + Snapshot (COW)</th><th>Thin + Snapshot (ROW)</th></tr>
+<tr><td>IOPS before snap</td><td class="num">~16,000</td><td class="num">~14,600</td></tr>
+<tr><td>IOPS after snap</td><td class="num"><strong>~430</strong></td><td class="num">~13,600</td></tr>
+<tr><td>Slowdown</td><td class="num"><strong>37x</strong></td><td class="num">1.07x</td></tr>
+<tr><td>Read I/O after snap</td><td>Yes (COW read)</td><td>None</td></tr>
+</table>
+
+<div class="callout danger">
+<strong>LVM snapshot COW is catastrophically slow for random writes.</strong> Each 4KB write becomes: Read old block &rarr; Write to COW area &rarr; Write new data. Three serial I/Os at QD=1 = 37x slowdown. The green dots (reads) appearing after the snapshot are the COW source reads.
+</div>
+
+<p>Thin snapshots barely notice. Since dm-thin already uses COW internally (redirect-on-write), a snapshot just means old block pointers are preserved in the metadata tree. No extra read or copy is needed.</p>
+
+<!-- ============================================================ -->
+<h2>Experiment 3: ZFS vs Btrfs &mdash; COW Filesystems</h2>
+
+<p>Both ZFS and Btrfs are copy-on-write filesystems. Every write goes to a new location, and metadata trees are updated with new pointers. But the implementation details lead to very different I/O patterns.</p>
+
+<div id="viz-cowfs" class="viz-wrap"></div>
+
+<table>
+<tr><th></th><th>ZFS</th><th>Btrfs</th></tr>
+<tr><td>fio logical writes</td><td class="num">~450 MB</td><td class="num">~445 MB</td></tr>
+<tr><td>Physical writes</td><td class="num"><strong>10,449 MB</strong></td><td class="num">~445 MB</td></tr>
+<tr><td>Write amplification</td><td class="num"><strong>~23x</strong></td><td class="num">~1.0x</td></tr>
+<tr><td>I/O pattern</td><td>Spread across entire 10GB disk</td><td>Sequential, single region</td></tr>
+</table>
+
+<h3>Why ZFS writes 23x more than requested</h3>
+<p>ZFS's default <code>recordsize=128KB</code> is the culprit. When fio writes 4KB to a record, ZFS COWs the <strong>entire 128KB record</strong> to a new location. That's a 32x data amplification before metadata is even counted.</p>
+
+<p>Additionally, ZFS batches writes into <strong>Transaction Groups (TXGs)</strong> that flush approximately every 5 seconds. It ignores <code>O_DIRECT</code> and caches everything in the ARC, then writes large sequential batches across the disk's metaslab allocator. This is why the ZFS panel shows writes scattered across the full 10GB &mdash; the metaslab allocator intentionally distributes writes for wear leveling.</p>
+
+<div class="callout">
+<strong>Setting <code>recordsize=4k</code></strong> would eliminate the record-level amplification for this workload, but would hurt sequential read performance. This is a fundamental ZFS tradeoff for mixed workloads.
+</div>
+
+<h3>Why Btrfs is efficient here</h3>
+<p>Btrfs uses extent-based allocation. A 4KB COW write produces a 4KB extent at a new location &mdash; 1:1. With <code>fallocate=none</code> (no preallocation), every write is a fresh allocation, and the block allocator hands out sectors sequentially. The result is <strong>nearly zero write amplification</strong> and a perfectly sequential physical I/O pattern, even though fio is issuing random logical writes.</p>
+
+<div class="callout">
+<strong>Note on fio settings:</strong> By default, fio preallocates the test file with <code>fallocate()</code> or sequential writes before starting random I/O. On Btrfs, this creates preallocated extents that make subsequent COW writes appear scattered (as they land near the original extent locations). We use <code>--fallocate=none --create_on_open=1</code> to disable this and observe the true COW allocation pattern.
+</div>
+
+<!-- ============================================================ -->
+<h2>Experiment 4: Snapshots on COW Filesystems</h2>
+
+<p>Unlike LVM, ZFS and Btrfs are already COW. Does taking a snapshot change anything?</p>
+
+<div id="viz-cowfs-snap" class="viz-wrap"></div>
+
+<h3>Three phases</h3>
+<ol style="margin: 12px 0 12px 24px; color: var(--fg);">
+  <li><strong>Phase 1</strong> (10s): Fresh file, initial writes</li>
+  <li><strong>Phase 2</strong> (30s): After snapshot #1 &mdash; old blocks pinned, cannot be reused</li>
+  <li><strong>Phase 3</strong> (10s): After snapshot #2 &mdash; intermediate blocks from Phase 2 partially reclaimable</li>
+</ol>
+
+<p>The I/O throughput barely changes across phases &mdash; no 37x slowdown like LVM. But the <strong>allocation pattern</strong> changes dramatically on Btrfs:</p>
+
+<table>
+<tr><th>Phase</th><th>Btrfs sequential %</th><th>Explanation</th></tr>
+<tr><td>Phase 1</td><td class="num"><strong>100%</strong></td><td>Fresh file, no preallocation &rarr; allocator assigns blocks sequentially</td></tr>
+<tr><td>Phase 2</td><td class="num"><strong>100%</strong></td><td>Snapshot pins all blocks &rarr; no reuse possible &rarr; pure sequential allocation</td></tr>
+<tr><td>Phase 3</td><td class="num">70%</td><td>Phase 2's intermediate COW blocks (not pinned by snap1) become reusable</td></tr>
+</table>
+
+<div class="callout warn">
+<strong>The hidden cost of COW snapshots:</strong> Performance doesn't drop, but disk consumption grows. Since old blocks can't be freed, every COW write consumes new space. ZFS at 96% pool usage + snapshots = writes stop entirely (<code>ENOSPC</code>). The "keep pools under 80%" rule exists for this reason.
+</div>
+
+<!-- ============================================================ -->
+<h2>Key Takeaways</h2>
+
+<table>
+<tr><th>Storage Stack</th><th>Write Amplification (4K randwrite)</th><th>Snapshot Overhead</th></tr>
+<tr><td>LVM Linear</td><td class="num">1.0x</td><td>N/A</td></tr>
+<tr><td>LVM Thin</td><td class="num">~1.5x (metadata)</td><td>ROW &mdash; minimal</td></tr>
+<tr><td>LVM Snapshot (classic)</td><td class="num">1.0x before, <strong>3x+ after</strong></td><td><strong>COW R+W+W &mdash; catastrophic</strong></td></tr>
+<tr><td>Btrfs</td><td class="num">~1.0x</td><td>No slowdown, but space grows</td></tr>
+<tr><td>ZFS (recordsize=128k)</td><td class="num"><strong>~23x</strong></td><td>No slowdown, but space grows</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>Reproducing This</h2>
+
+<p>All experiments ran in a QEMU/KVM VM with two 10GB virtio disks. The full setup is in the <a href="https://github.com/">repository</a>.</p>
+
+<pre><code># VM setup
+vm/start.sh          # Launch QEMU with two extra disks
+vm/ssh.sh            # SSH into the VM
+
+# Experiment scripts (run inside VM as root)
+scripts/run_linear.sh       # LVM linear + snapshot
+scripts/run_thin.sh         # LVM thin + snapshot
+scripts/run_zfs.sh          # ZFS basic
+scripts/run_btrfs.sh        # Btrfs basic
+scripts/run_snap_long.sh    # ZFS/Btrfs with multiple snapshots
+
+# All I/O captured with blktrace, parsed with blkparse,
+# extracted to JSON with:
+blkparse -i trace -q | awk '$6=="C" && $7~/[WR]/{
+  printf "{\"t\":%.6f,\"s\":%d,\"n\":%d,\"type\":\"%s\"},\n", $4, $8, $10, $7
+}'</code></pre>
+
+<footer>
+  Built with <code>blktrace</code>, <code>fio</code>, and a QEMU VM.
+  <a href="https://github.com/">Source on GitHub</a>
+</footer>
+
+</div>
+
+<!-- ============================================================ -->
+<!-- Shared visualization engine -->
+<script>
+function createViz(containerId, opts) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  const {
+    leftFile, rightFile, leftLabel, rightLabel,
+    leftColor = '#0af', rightColor = '#f80',
+    phases = [], filterButtons = false,
+    metaThreshold = null
+  } = opts;
+
+  // Build DOM
+  const header = document.createElement('div');
+  header.className = 'viz-header';
+
+  const title = document.createElement('span');
+  title.className = 'title';
+  title.textContent = opts.title || '';
+  header.appendChild(title);
+
+  const controls = document.createElement('div');
+  controls.className = 'viz-controls';
+
+  const btnPlay = mkBtn('Play', true);
+  const btnPause = mkBtn('Pause');
+  const btnReset = mkBtn('Reset');
+  controls.append(btnPlay, btnPause, btnReset);
+
+  const lblSpeed = document.createElement('label');
+  lblSpeed.textContent = 'Speed:';
+  const sliderSpeed = document.createElement('input');
+  sliderSpeed.type = 'range'; sliderSpeed.min = 1; sliderSpeed.max = 100; sliderSpeed.value = 8;
+  const spanSpeed = document.createElement('span');
+  spanSpeed.textContent = '8x';
+  controls.append(lblSpeed, sliderSpeed, spanSpeed);
+
+  const lblTrail = document.createElement('label');
+  lblTrail.textContent = 'Trail:';
+  const sliderTrail = document.createElement('input');
+  sliderTrail.type = 'range'; sliderTrail.min = 5; sliderTrail.max = 100; sliderTrail.value = 20;
+  controls.append(lblTrail, sliderTrail);
+
+  let activeFilter = null;
+  if (filterButtons) {
+    const sep = document.createElement('span');
+    sep.textContent = '|'; sep.style.color = '#333';
+    controls.appendChild(sep);
+    const filtAll = mkBtn('All', true); const filtW = mkBtn('Writes'); const filtR = mkBtn('Reads');
+    const filterDefs = { all: null, writes: new Set(['WS','WFS','W','WM']), reads: new Set(['R','RS','RA']) };
+    [filtAll, filtW, filtR].forEach((btn, i) => {
+      const key = ['all','writes','reads'][i];
+      btn.onclick = () => {
+        [filtAll, filtW, filtR].forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        activeFilter = filterDefs[key];
+      };
+      controls.appendChild(btn);
+    });
+  }
+
+  header.appendChild(controls);
+  container.appendChild(header);
+
+  const legend = document.createElement('div');
+  legend.className = 'viz-legend';
+  legend.innerHTML = '<span class="ws">WS (sync write)</span><span class="w">W (async write)</span><span class="wm">WM (metadata)</span><span class="r">R (read)</span><span class="ra">RA (read-ahead)</span>';
+  container.appendChild(legend);
+
+  const body = document.createElement('div');
+  body.className = 'viz-body';
+  const panelL = mkPanel(leftLabel, leftColor);
+  const panelR = mkPanel(rightLabel, rightColor);
+  body.append(panelL.el, panelR.el);
+  container.appendChild(body);
+
+  const tlWrap = document.createElement('div');
+  tlWrap.className = 'viz-timeline';
+  const cvTL = document.createElement('canvas');
+  tlWrap.appendChild(cvTL);
+  container.appendChild(tlWrap);
+
+  // State
+  let dataL = [], dataR = [];
+  let playing = true, currentTime = 0, speedMult = 8, trailSec = 0.2;
+  let idxL = 0, idxR = 0, maxTime = 0;
+  let countsL = {}, countsR = {}, sectorsL = 0, sectorsR = 0;
+  let lMinS, lMaxS, rMinS, rMaxS;
+  let snapTimes = [];
+
+  function resetState() {
+    currentTime = 0; idxL = idxR = 0;
+    countsL = {}; countsR = {}; sectorsL = sectorsR = 0;
+  }
+
+  // Load
+  Promise.all([
+    fetch('data/' + leftFile).then(r => r.json()),
+    fetch('data/' + rightFile).then(r => r.json())
+  ]).then(([l, r]) => {
+    dataL = l; dataR = r;
+    const lStart = dataL[0].t; dataL.forEach(e => e.t -= lStart);
+    const rStart = dataR[0].t; dataR.forEach(e => e.t -= rStart);
+    maxTime = Math.max(dataL[dataL.length-1].t, dataR[dataR.length-1].t);
+    [lMinS, lMaxS] = mmx(dataL);
+    [rMinS, rMaxS] = mmx(dataR);
+    snapTimes = detectAllGaps(dataL, dataR);
+    resize();
+    requestAnimationFrame(animate);
+  });
+
+  // Controls
+  btnPlay.onclick = () => { playing = true; btnPlay.classList.add('active'); btnPause.classList.remove('active'); };
+  btnPause.onclick = () => { playing = false; btnPause.classList.add('active'); btnPlay.classList.remove('active'); };
+  btnReset.onclick = () => { resetState(); playing = true; btnPlay.classList.add('active'); btnPause.classList.remove('active'); };
+  sliderSpeed.oninput = () => { speedMult = +sliderSpeed.value; spanSpeed.textContent = speedMult + 'x'; };
+  sliderTrail.oninput = () => { trailSec = +sliderTrail.value / 100; };
+  cvTL.onclick = (e) => {
+    const rect = cvTL.getBoundingClientRect();
+    currentTime = ((e.clientX - rect.left) / rect.width) * maxTime;
+    idxL = idxR = 0; countsL = {}; countsR = {}; sectorsL = sectorsR = 0;
+    while (idxL < dataL.length && dataL[idxL].t <= currentTime) { const ev=dataL[idxL]; countsL[ev.type]=(countsL[ev.type]||0)+1; sectorsL+=ev.n; idxL++; }
+    while (idxR < dataR.length && dataR[idxR].t <= currentTime) { const ev=dataR[idxR]; countsR[ev.type]=(countsR[ev.type]||0)+1; sectorsR+=ev.n; idxR++; }
+  };
+
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    [panelL.cv, panelR.cv].forEach(cv => {
+      const r = cv.parentElement.getBoundingClientRect();
+      cv.width = r.width * dpr; cv.height = r.height * dpr;
+      cv.getContext('2d').setTransform(dpr,0,0,dpr,0,0);
+    });
+    const tr = tlWrap.getBoundingClientRect();
+    cvTL.width = tr.width * dpr; cvTL.height = 28 * dpr;
+    cvTL.getContext('2d').setTransform(dpr,0,0,dpr,0,0);
+  }
+  window.addEventListener('resize', resize);
+
+  let lastFrame = 0;
+  function animate(ts) {
+    if (!lastFrame) lastFrame = ts;
+    const dt = (ts - lastFrame) / 1000; lastFrame = ts;
+    if (playing) {
+      currentTime += dt * speedMult;
+      if (currentTime > maxTime) { currentTime = maxTime; playing = false; btnPause.classList.add('active'); btnPlay.classList.remove('active'); }
+    }
+    while (idxL < dataL.length && dataL[idxL].t <= currentTime) { const e=dataL[idxL]; countsL[e.type]=(countsL[e.type]||0)+1; sectorsL+=e.n; idxL++; }
+    while (idxR < dataR.length && dataR[idxR].t <= currentTime) { const e=dataR[idxR]; countsR[e.type]=(countsR[e.type]||0)+1; sectorsR+=e.n; idxR++; }
+
+    const ctxL = panelL.cv.getContext('2d');
+    const ctxR = panelR.cv.getContext('2d');
+    const wL = panelL.cv.width / (window.devicePixelRatio||1);
+    const hL = panelL.cv.height / (window.devicePixelRatio||1);
+    const wR = panelR.cv.width / (window.devicePixelRatio||1);
+    const hR = panelR.cv.height / (window.devicePixelRatio||1);
+    const trail = Math.max(0.02, trailSec);
+
+    ctxL.fillStyle = '#0a0a0a'; ctxL.fillRect(0,0,wL,hL);
+    ctxR.fillStyle = '#0a0a0a'; ctxR.fillRect(0,0,wR,hR);
+
+    drawGrid(ctxL, wL, hL, lMinS, lMaxS);
+    drawDots(ctxL, dataL, idxL, wL, hL, lMinS, lMaxS, currentTime, trail, activeFilter);
+    drawGrid(ctxR, wR, hR, rMinS, rMaxS);
+    drawDots(ctxR, dataR, idxR, wR, hR, rMinS, rMaxS, currentTime, trail, activeFilter);
+
+    panelL.stats.innerHTML = fmtStats(countsL, sectorsL);
+    panelR.stats.innerHTML = fmtStats(countsR, sectorsR);
+
+    // Phase display
+    if (phases.length > 0) {
+      const pL = getPhase(currentTime, snapTimes.filter(s => s.side === 'L' || s.side === 'both'));
+      const pR = getPhase(currentTime, snapTimes.filter(s => s.side === 'R' || s.side === 'both'));
+      panelL.phase.textContent = pL.name; panelL.phase.style.color = pL.color;
+      panelR.phase.textContent = pR.name; panelR.phase.style.color = pR.color;
+    }
+
+    drawTimeline(cvTL.getContext('2d'), cvTL.width/(window.devicePixelRatio||1), maxTime, currentTime, snapTimes);
+    requestAnimationFrame(animate);
+  }
+
+  function getPhase(t, snaps) {
+    const times = snaps.map(s => s.t).sort((a,b) => a-b);
+    if (times.length === 0) return {name:'', color:'#888'};
+    if (times.length >= 2 && t >= times[1]) return {name: phases[2] || 'Phase 3', color: '#f44'};
+    if (t >= times[0]) return {name: phases[1] || 'Phase 2', color: '#fa0'};
+    return {name: phases[0] || 'Phase 1', color: '#4a4'};
+  }
+}
+
+// --- Shared drawing functions ---
+function typeColor(type, alpha) {
+  switch(type) {
+    case 'R': case 'RS': return `rgba(0,255,100,${alpha})`;
+    case 'RA': return `rgba(68,136,68,${alpha})`;
+    case 'W': return `rgba(255,80,0,${alpha})`;
+    case 'WM': return `rgba(255,170,0,${alpha})`;
+    case 'WS': case 'WFS': return `rgba(0,170,255,${alpha})`;
+    default: return `rgba(128,128,128,${alpha})`;
+  }
+}
+function isRead(t) { return t==='R'||t==='RS'||t==='RA'; }
+function fmtSector(s) {
+  if (s>=1048576) return (s/2048/1024).toFixed(1)+'GB';
+  if (s>=2048) return (s/2048).toFixed(0)+'MB';
+  return (s*512/1024).toFixed(0)+'KB';
+}
+function mmx(arr) {
+  let min=Infinity,max=-Infinity;
+  for(const e of arr){if(e.s<min)min=e.s;if(e.s>max)max=e.s;}
+  return [min,max];
+}
+function drawGrid(ctx,w,h,minS,maxS) {
+  ctx.fillStyle='#333'; ctx.font='10px monospace';
+  for(let i=0;i<=6;i++){
+    const s=minS+(maxS-minS)*(i/6);
+    const y=50+((s-minS)/(maxS-minS||1))*(h-70);
+    ctx.fillRect(0,y,w,0.5);
+    ctx.fillStyle='#555'; ctx.fillText(fmtSector(s),4,y-2); ctx.fillStyle='#333';
+  }
+}
+function drawDots(ctx,data,endIdx,w,h,minS,maxS,time,trail,filter) {
+  const st=time-trail;
+  let lo=0,hi=endIdx;
+  while(lo<hi){const m=(lo+hi)>>1;if(data[m].t<st)lo=m+1;else hi=m;}
+  for(let i=lo;i<endIdx;i++){
+    const e=data[i];
+    if(filter&&!filter.has(e.type))continue;
+    const age=(time-e.t)/trail;
+    const alpha=Math.max(0,1-age*0.8);
+    const y=50+((e.s-minS)/(maxS-minS||1))*(h-70);
+    const x=60+((e.t-st)/trail)*(w-80);
+    const sz=isRead(e.type)?2:(e.type==='W'||e.type==='WM'?3:2);
+    ctx.fillStyle=typeColor(e.type,alpha);
+    if(isRead(e.type)){ctx.beginPath();ctx.arc(x,y,sz,0,Math.PI*2);ctx.fill();}
+    else ctx.fillRect(x,y,sz,sz);
+  }
+}
+function drawTimeline(ctx,w,maxT,curT,snaps) {
+  ctx.clearRect(0,0,w,28);
+  ctx.fillStyle='#181818'; ctx.fillRect(0,0,w,28);
+  // snap markers
+  ctx.setLineDash([3,3]); ctx.lineWidth=1;
+  const colors = ['#0af','#f80','#08f','#f60'];
+  snaps.forEach((s,i) => {
+    const x=(s.t/maxT)*w;
+    ctx.strokeStyle=colors[i%colors.length];
+    ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,16);ctx.stroke();
+    ctx.fillStyle=colors[i%colors.length]; ctx.font='9px monospace';
+    ctx.fillText(s.label||'snap',x+2,12);
+  });
+  ctx.setLineDash([]);
+  ctx.fillStyle='#0af'; ctx.fillRect(0,24,w*(curT/maxT),4);
+  ctx.fillStyle='#444'; ctx.font='9px monospace';
+  const tick=maxT>20?5:maxT>10?2:maxT>5?1:0.5;
+  for(let t=0;t<=maxT;t+=tick){
+    const x=(t/maxT)*w; ctx.fillRect(x,18,1,10);
+    ctx.fillText(t.toFixed(0)+'s',x+2,17);
+  }
+}
+function detectAllGaps(dL,dR) {
+  const gaps=[];
+  function findGaps(data,side){
+    for(let i=1;i<data.length;i++){
+      const g=data[i].t-data[i-1].t;
+      if(g>0.3)gaps.push({t:(data[i-1].t+data[i].t)/2, g, side});
+    }
+  }
+  findGaps(dL,'L'); findGaps(dR,'R');
+  // merge nearby gaps
+  gaps.sort((a,b)=>a.t-b.t);
+  const merged=[];
+  for(const g of gaps){
+    const last=merged[merged.length-1];
+    if(last&&Math.abs(last.t-g.t)<1){last.side='both';last.t=(last.t+g.t)/2;}
+    else merged.push({...g});
+  }
+  merged.forEach((g,i)=>g.label='snap'+(i+1));
+  return merged;
+}
+function fmtStats(counts,sectors) {
+  const parts=[];
+  for(const[k,v]of Object.entries(counts))if(v>0)parts.push(k+':'+v.toLocaleString());
+  parts.push((sectors/2048).toFixed(0)+'MB');
+  return parts.join(' | ');
+}
+function mkBtn(text,active) {
+  const b=document.createElement('button');
+  b.textContent=text;
+  if(active)b.classList.add('active');
+  return b;
+}
+function mkPanel(label,color) {
+  const el=document.createElement('div'); el.className='viz-panel';
+  const lbl=document.createElement('div'); lbl.className='viz-panel-label'; lbl.style.color=color; lbl.textContent=label;
+  const phase=document.createElement('div'); phase.className='viz-panel-phase';
+  const stats=document.createElement('div'); stats.className='viz-panel-stats';
+  const cv=document.createElement('canvas');
+  el.append(lbl,phase,stats,cv);
+  return {el,cv,stats,phase};
+}
+
+// --- Instantiate all visualizations ---
+createViz('viz-basic', {
+  title: 'LVM Linear vs dm-thin (random 4K write, 10s)',
+  leftFile: 'basic_linear_writes.json',
+  rightFile: 'basic_thin_writes.json',
+  leftLabel: 'Linear (vdc)', rightLabel: 'Thin (vdd)',
+});
+
+createViz('viz-snap', {
+  title: 'LVM Snapshot: COW (linear) vs ROW (thin)',
+  leftFile: 'linear_writes.json',
+  rightFile: 'thin_writes.json',
+  leftLabel: 'Linear + Snapshot', rightLabel: 'Thin + Snapshot',
+  phases: ['Normal writes', 'Post-snapshot', ''],
+});
+
+createViz('viz-cowfs', {
+  title: 'COW Filesystems: ZFS vs Btrfs (random 4K write, 10s)',
+  leftFile: 'zfs_writes.json',
+  rightFile: 'btrfs_writes.json',
+  leftLabel: 'ZFS (vdc)', rightLabel: 'Btrfs (vdd)',
+  filterButtons: true,
+});
+
+createViz('viz-cowfs-snap', {
+  title: 'COW FS Snapshots: ZFS vs Btrfs (3 phases)',
+  leftFile: 'zfs_snap_writes.json',
+  rightFile: 'btrfs_snap_writes.json',
+  leftLabel: 'ZFS (vdc)', rightLabel: 'Btrfs (vdd)',
+  phases: ['Initial writes', 'Post-snap1', 'Post-snap2'],
+  filterButtons: true,
+});
+</script>
+</body>
+</html>
