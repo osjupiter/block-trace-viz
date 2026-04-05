@@ -214,6 +214,8 @@ footer { margin-top: 60px; padding: 24px 0; border-top: 1px solid #222; color: v
 <tr><td>Phase 3</td><td class="num">70%</td><td>Phase 2's intermediate COW blocks (not pinned by snap1) become reusable</td></tr>
 </table>
 
+<p>Look closely at the Btrfs panel in Phase 3: instead of a single sequential line, the writes split into multiple bands across the disk. The allocator is pulling free blocks from several partially-freed block groups (where Phase 2's intermediate COW data was released) while simultaneously advancing a sequential write frontier at the top. This is what COW fragmentation looks like with multiple snapshots &mdash; throughput is unaffected, but physical layout becomes scattered.</p>
+
 <div class="callout warn">
 <strong>The hidden cost of COW snapshots:</strong> Performance doesn't drop, but disk consumption grows. Since old blocks can't be freed, every COW write consumes new space. ZFS at 96% pool usage + snapshots = writes stop entirely (<code>ENOSPC</code>). The "keep pools under 80%" rule exists for this reason.
 </div>
