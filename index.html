@@ -302,6 +302,28 @@ function createViz(containerId, opts) {
   sliderTrail.type = 'range'; sliderTrail.min = 5; sliderTrail.max = 100; sliderTrail.value = 20;
   controls.append(lblTrail, sliderTrail);
 
+  // Sync zoom toggle
+  let syncZoom = false;
+  const sepZoom = document.createElement('span');
+  sepZoom.textContent = '|'; sepZoom.style.color = '#333';
+  controls.appendChild(sepZoom);
+  const btnSync = mkBtn('Sync Y');
+  btnSync.onclick = () => {
+    syncZoom = !syncZoom;
+    btnSync.classList.toggle('active', syncZoom);
+    if (syncZoom) {
+      // Unify to the wider range
+      const newMin = Math.min(lMinS, rMinS);
+      const newMax = Math.max(lMaxS, rMaxS);
+      lMinS = rMinS = newMin;
+      lMaxS = rMaxS = newMax;
+    } else {
+      lMinS = lMinSBase; lMaxS = lMaxSBase;
+      rMinS = rMinSBase; rMaxS = rMaxSBase;
+    }
+  };
+  controls.appendChild(btnSync);
+
   let activeFilter = null;
   if (filterButtons) {
     const sep = document.createElement('span');
@@ -435,12 +457,12 @@ function createViz(containerId, opts) {
 
   addZoomPan(panelL.cv,
     () => [lMinS, lMaxS],
-    (a, b) => { lMinS = a; lMaxS = b; },
+    (a, b) => { lMinS = a; lMaxS = b; if (syncZoom) { rMinS = a; rMaxS = b; } },
     () => [lMinSBase, lMaxSBase]
   );
   addZoomPan(panelR.cv,
     () => [rMinS, rMaxS],
-    (a, b) => { rMinS = a; rMaxS = b; },
+    (a, b) => { rMinS = a; rMaxS = b; if (syncZoom) { lMinS = a; lMaxS = b; } },
     () => [rMinSBase, rMaxSBase]
   );
 
