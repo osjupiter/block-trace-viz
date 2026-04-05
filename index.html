@@ -151,7 +151,7 @@ footer { margin-top: 60px; padding: 24px 0; border-top: 1px solid #222; color: v
 <tr><th></th><th>Without fsync</th><th>With fsync</th></tr>
 <tr><td>Linear</td><td class="num">~17,000 IOPS</td><td class="num"><strong>963 IOPS</strong></td></tr>
 <tr><td>Thin</td><td class="num">~10,500 IOPS</td><td class="num"><strong>410 IOPS</strong></td></tr>
-<tr><td>Linear + Snapshot</td><td class="num">~430 IOPS</td><td class="num">(already flushing)</td></tr>
+<tr><td>Linear + Snapshot</td><td class="num">~430 IOPS</td><td class="num">~430 IOPS (already flushing per write)</td></tr>
 </table>
 
 <p>With fsync, plain linear drops from 17k to 963 IOPS &mdash; close to dm-snapshot's 430 IOPS. The remaining 2x gap is the COW overhead (R + W + extra flush). dm-thin with fsync is even slower at 410 IOPS because each fsync triggers a full metadata transaction commit with 3 flushes. The takeaway: <strong>most of the "snapshot penalty" in Experiment 2 was actually the cost of flushing that other configurations were avoiding.</strong></p>
