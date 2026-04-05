@@ -141,6 +141,21 @@ footer { margin-top: 60px; padding: 24px 0; border-top: 1px solid #222; color: v
 <strong>Why don't other snapshot implementations flush on every write?</strong> dm-thin and ZFS/Btrfs batch metadata updates into periodic transaction commits (dm-thin ~1s, ZFS ~5s, Btrfs ~30s). This means a crash could lose the last few seconds of writes, but snapshots remain consistent because the metadata is updated atomically at commit time. dm-snapshot chose the safer but slower path: every single COW operation is immediately persisted. An <code>fsync()</code> from the application would trigger a commit on the batched systems too, but fio with <code>O_DIRECT</code> alone does not force one.
 </div>
 
+<h3>Aside: What if we add fsync?</h3>
+
+<p>The 37x slowdown above is partly because dm-linear <em>without</em> snapshots never flushes the device cache &mdash; <code>O_DIRECT</code> alone doesn't trigger a flush. Adding <code>fsync</code> after every write (<code>fio --fsync=1</code>) forces all implementations to flush, leveling the playing field:</p>
+
+<div id="viz-fsync" class="viz-wrap"></div>
+
+<table>
+<tr><th></th><th>Without fsync</th><th>With fsync</th></tr>
+<tr><td>Linear</td><td class="num">~17,000 IOPS</td><td class="num"><strong>963 IOPS</strong></td></tr>
+<tr><td>Thin</td><td class="num">~10,500 IOPS</td><td class="num"><strong>410 IOPS</strong></td></tr>
+<tr><td>Linear + Snapshot</td><td class="num">~430 IOPS</td><td class="num">(already flushing)</td></tr>
+</table>
+
+<p>With fsync, plain linear drops from 17k to 963 IOPS &mdash; close to dm-snapshot's 430 IOPS. The remaining 2x gap is the COW overhead (R + W + extra flush). dm-thin with fsync is even slower at 410 IOPS because each fsync triggers a full metadata transaction commit with 3 flushes. The takeaway: <strong>most of the "snapshot penalty" in Experiment 2 was actually the cost of flushing that other configurations were avoiding.</strong></p>
+
 <p>Thin snapshots use <strong>Redirect-On-Write (ROW)</strong> &mdash; instead of copying old data, new data goes to a fresh location and the metadata pointer is updated. However, look closely at the thin panel after the snapshot: there are <strong>green dots (reads)</strong> appearing. dm-thin's chunk size is 64KB, but fio writes 4KB. When a 4KB write hits a shared 64KB chunk, dm-thin must read the entire chunk, copy it to a new location, then apply the 4KB change &mdash; effectively COW at the chunk level. If the chunk size matched the write size (e.g. <code>lvcreate -T ... -c 4k</code>), these reads would disappear entirely.</p>
 
 <!-- ============================================================ -->
@@ -604,6 +619,13 @@ createViz('viz-snap', {
   rightFile: 'thin_writes.json',
   leftLabel: 'Linear + Snapshot', rightLabel: 'Thin + Snapshot',
   phases: ['Normal writes', 'Post-snapshot', ''],
+});
+
+createViz('viz-fsync', {
+  title: 'Effect of fsync: Linear vs Thin (random 4K write + fsync=1, 10s)',
+  leftFile: 'linear_fsync_writes.json',
+  rightFile: 'thin_fsync_writes.json',
+  leftLabel: 'Linear + fsync', rightLabel: 'Thin + fsync',
 });
 
 createViz('viz-cowfs', {
