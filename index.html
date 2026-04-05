@@ -375,6 +375,9 @@ function createViz(containerId, opts) {
   function resetState() {
     currentTime = 0; idxL = idxR = 0;
     countsL = {}; countsR = {}; sectorsL = sectorsR = 0;
+    // Reset zoom/pan to original ranges
+    if (lMinSBase !== undefined) { lMinS = lMinSBase; lMaxS = lMaxSBase; }
+    if (rMinSBase !== undefined) { rMinS = rMinSBase; rMaxS = rMaxSBase; }
   }
 
   // Load
@@ -422,16 +425,26 @@ function createViz(containerId, opts) {
 
   // Y-axis zoom (wheel) and pan (drag) for each panel
   function addZoomPan(cv, getRange, setRange, getBase) {
+    function clamp(newMin, newMax) {
+      const [bMin, bMax] = getBase();
+      const range = newMax - newMin;
+      // Don't allow zooming out beyond original range
+      if (range >= bMax - bMin) return [bMin, bMax];
+      // Clamp pan to stay within data bounds
+      if (newMin < bMin) { newMin = bMin; newMax = bMin + range; }
+      if (newMax > bMax) { newMax = bMax; newMin = bMax - range; }
+      return [newMin, newMax];
+    }
+
     cv.addEventListener('wheel', (e) => {
       e.preventDefault();
       const [minS, maxS] = getRange();
       const rect = cv.getBoundingClientRect();
       const yFrac = (e.clientY - rect.top) / rect.height;
       const pivot = minS + (maxS - minS) * yFrac;
-      const factor = e.deltaY > 0 ? 1.15 : 0.87; // zoom out / in
-      const newMin = pivot - (pivot - minS) * factor;
-      const newMax = pivot + (maxS - pivot) * factor;
-      setRange(newMin, newMax);
+      const factor = e.deltaY > 0 ? 1.15 : 0.87;
+      const [cMin, cMax] = clamp(pivot - (pivot - minS) * factor, pivot + (maxS - pivot) * factor);
+      setRange(cMin, cMax);
     }, {passive: false});
 
     let dragging = false, dragStartY = 0, dragMinS = 0, dragMaxS = 0;
@@ -445,7 +458,8 @@ function createViz(containerId, opts) {
       const rect = cv.getBoundingClientRect();
       const dy = (e.clientY - dragStartY) / rect.height;
       const range = dragMaxS - dragMinS;
-      setRange(dragMinS - dy * range, dragMaxS - dy * range);
+      const [cMin, cMax] = clamp(dragMinS - dy * range, dragMaxS - dy * range);
+      setRange(cMin, cMax);
     });
     window.addEventListener('mouseup', () => { dragging = false; cv.style.cursor = 'default'; });
 
