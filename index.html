@@ -134,7 +134,7 @@ footer { margin-top: 60px; padding: 24px 0; border-top: 1px solid #222; color: v
 </table>
 
 <div class="callout danger">
-<strong>LVM snapshot COW is catastrophically slow for random writes.</strong> Each 4KB write becomes a 6-step sequence: Read old block &rarr; Write to COW area &rarr; <strong>Flush</strong> &rarr; Write COW mapping table &rarr; <strong>Flush</strong> &rarr; Write new data. The two flushes (write barriers) ensure that the COW mapping is persisted before the original block is overwritten &mdash; without them, a crash could corrupt the snapshot. At QD=1, these 6 serial I/Os produce a 37x slowdown. The green dots (reads) are the COW source reads.
+<strong>LVM snapshot COW is catastrophically slow for random writes.</strong> Each 4KB write becomes a 6-step sequence: Read old block &rarr; Write to COW area &rarr; <strong>Flush</strong> &rarr; Write COW mapping table &rarr; <strong>Flush</strong> &rarr; Write new data. The two flushes (write barriers) ensure that the COW mapping is persisted before the original block is overwritten &mdash; without them, a crash could corrupt the snapshot. Measuring the actual timing of each step: R ~0.06ms, W ~0.08ms, <strong>Flush ~0.9ms &times; 2 = 1.8ms</strong>, total ~2ms per write. The flushes alone account for 90% of the latency, producing the 37x slowdown from ~16k IOPS down to ~430. The green dots (reads) are the COW source reads.
 </div>
 
 <div class="callout">
