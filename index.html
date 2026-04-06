@@ -80,6 +80,9 @@ td { color: var(--fg); }
 .viz-legend .r::before { background: #0f6; }
 .viz-legend .ra::before { background: #484; }
 
+.diagram { margin: 24px 0; display: flex; gap: 24px; justify-content: center; flex-wrap: wrap; }
+.diagram svg { background: var(--bg2); border-radius: 6px; border: 1px solid #222; }
+
 footer { margin-top: 60px; padding: 24px 0; border-top: 1px solid #222; color: var(--fg2); font-size: 0.85em; text-align: center; }
 </style>
 </head>
@@ -103,6 +106,38 @@ footer { margin-top: 60px; padding: 24px 0; border-top: 1px solid #222; color: v
 
 <p>The simplest comparison: a plain LVM logical volume (linear mapping) vs a thin-provisioned LV. Same random 4KB writes, same seed, same duration.</p>
 
+<div class="diagram">
+<svg width="340" height="200" viewBox="0 0 340 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <text x="170" y="18" text-anchor="middle" fill="#888" font-size="12" font-family="monospace" font-weight="bold">dm-linear</text>
+  <rect x="120" y="30" width="100" height="30" rx="4" fill="#1a2a3a" stroke="#0af" stroke-width="1"/>
+  <text x="170" y="50" text-anchor="middle" fill="#0af" font-size="11" font-family="monospace">Logical Vol</text>
+  <text x="170" y="75" fill="#555" font-size="10" text-anchor="middle" font-family="monospace">offset mapping</text>
+  <path d="M170 60 L170 90" stroke="#555" stroke-width="1" stroke-dasharray="3,3"/>
+  <rect x="50" y="90" width="240" height="30" rx="4" fill="#1a1a2a" stroke="#555" stroke-width="1"/>
+  <text x="170" y="110" text-anchor="middle" fill="#888" font-size="11" font-family="monospace">Physical Device</text>
+  <text x="170" y="140" fill="#555" font-size="10" text-anchor="middle" font-family="monospace">Write 4KB &rarr; disk gets 4KB</text>
+  <text x="170" y="155" fill="#555" font-size="10" text-anchor="middle" font-family="monospace">1:1 address translation</text>
+  <text x="170" y="175" fill="#4a4" font-size="11" text-anchor="middle" font-family="monospace">No metadata overhead</text>
+</svg>
+
+<svg width="340" height="200" viewBox="0 0 340 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <text x="170" y="18" text-anchor="middle" fill="#888" font-size="12" font-family="monospace" font-weight="bold">dm-thin</text>
+  <rect x="120" y="30" width="100" height="30" rx="4" fill="#2a1a1a" stroke="#f80" stroke-width="1"/>
+  <text x="170" y="50" text-anchor="middle" fill="#f80" font-size="11" font-family="monospace">Thin LV</text>
+  <text x="120" y="75" fill="#555" font-size="10" text-anchor="middle" font-family="monospace">btree</text>
+  <text x="220" y="75" fill="#555" font-size="10" text-anchor="middle" font-family="monospace">space map</text>
+  <path d="M145 60 L120 85" stroke="#f80" stroke-width="1" stroke-dasharray="3,3"/>
+  <path d="M195 60 L220 85" stroke="#f80" stroke-width="1" stroke-dasharray="3,3"/>
+  <rect x="20" y="90" width="140" height="30" rx="4" fill="#1a1a2a" stroke="#555" stroke-width="1"/>
+  <text x="90" y="110" text-anchor="middle" fill="#888" font-size="10" font-family="monospace">Data area</text>
+  <rect x="180" y="90" width="140" height="30" rx="4" fill="#1a1a1a" stroke="#f50" stroke-width="1"/>
+  <text x="250" y="110" text-anchor="middle" fill="#f50" font-size="10" font-family="monospace">Metadata area</text>
+  <text x="170" y="140" fill="#555" font-size="10" text-anchor="middle" font-family="monospace">Write 4KB &rarr; data + metadata I/O</text>
+  <text x="170" y="155" fill="#555" font-size="10" text-anchor="middle" font-family="monospace">New chunks need btree + space map update</text>
+  <text x="170" y="175" fill="#fa0" font-size="11" text-anchor="middle" font-family="monospace">Periodic commit (~1s) blocks I/O</text>
+</svg>
+</div>
+
 <div id="viz-basic" class="viz-wrap"></div>
 
 <table>
@@ -120,6 +155,55 @@ footer { margin-top: 60px; padding: 24px 0; border-top: 1px solid #222; color: v
 <h2>Experiment 2: LVM Snapshot &mdash; COW vs ROW</h2>
 
 <p>What happens when you take a snapshot and keep writing? When you snapshot a regular (linear) LV, LVM uses <strong>dm-snapshot</strong> &mdash; a kernel module that intercepts writes and performs <strong>Copy-on-Write</strong>: before overwriting a block, it reads the old data and copies it to a separate COW area. Thin LVs handle snapshots differently with <strong>Redirect-on-Write (ROW)</strong>: new data simply goes to a new location, and the metadata pointer is updated.</p>
+
+<div class="diagram">
+<svg width="340" height="230" viewBox="0 0 340 230" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <text x="170" y="18" text-anchor="middle" fill="#888" font-size="12" font-family="monospace" font-weight="bold">dm-snapshot (COW)</text>
+  <!-- steps -->
+  <text x="20" y="45" fill="#0f6" font-size="11" font-family="monospace">1. Read old block</text>
+  <rect x="200" y="32" width="80" height="22" rx="3" fill="#1a2a1a" stroke="#0f6" stroke-width="1"/>
+  <text x="240" y="47" text-anchor="middle" fill="#0f6" font-size="10" font-family="monospace">OLD</text>
+  <path d="M280 43 L310 43" stroke="#0f6" stroke-width="1" marker-end="url(#arr)"/>
+
+  <text x="20" y="75" fill="#f50" font-size="11" font-family="monospace">2. Write to COW area</text>
+  <rect x="200" y="62" width="80" height="22" rx="3" fill="#2a1a1a" stroke="#f50" stroke-width="1"/>
+  <text x="240" y="77" text-anchor="middle" fill="#f50" font-size="10" font-family="monospace">COW copy</text>
+
+  <text x="20" y="105" fill="#f44" font-size="11" font-family="monospace">3. Flush (barrier)</text>
+  <text x="200" y="105" fill="#f44" font-size="10" font-family="monospace">~0.9ms wait</text>
+
+  <text x="20" y="130" fill="#f50" font-size="11" font-family="monospace">4. Write mapping table</text>
+  <text x="200" y="130" fill="#f44" font-size="10" font-family="monospace">persist COW location</text>
+
+  <text x="20" y="155" fill="#f44" font-size="11" font-family="monospace">5. Flush (barrier)</text>
+  <text x="200" y="155" fill="#f44" font-size="10" font-family="monospace">~0.9ms wait</text>
+
+  <text x="20" y="180" fill="#0af" font-size="11" font-family="monospace">6. Write new data</text>
+  <rect x="200" y="167" width="80" height="22" rx="3" fill="#1a2a3a" stroke="#0af" stroke-width="1"/>
+  <text x="240" y="182" text-anchor="middle" fill="#0af" font-size="10" font-family="monospace">NEW</text>
+
+  <text x="170" y="215" text-anchor="middle" fill="#f44" font-size="11" font-family="monospace" font-weight="bold">6 serial I/Os per write = ~2ms</text>
+</svg>
+
+<svg width="340" height="230" viewBox="0 0 340 230" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <text x="170" y="18" text-anchor="middle" fill="#888" font-size="12" font-family="monospace" font-weight="bold">dm-thin snapshot (ROW)</text>
+
+  <text x="20" y="50" fill="#0af" font-size="11" font-family="monospace">1. Write new data to new location</text>
+  <rect x="30" y="60" width="60" height="22" rx="3" fill="#1a2a3a" stroke="#0af" stroke-width="1"/>
+  <text x="60" y="75" text-anchor="middle" fill="#0af" font-size="10" font-family="monospace">NEW</text>
+  <rect x="110" y="60" width="60" height="22" rx="3" fill="#1a1a1a" stroke="#555" stroke-width="1"/>
+  <text x="140" y="75" text-anchor="middle" fill="#555" font-size="10" font-family="monospace">OLD</text>
+  <text x="195" y="75" fill="#555" font-size="10" font-family="monospace">(untouched)</text>
+
+  <text x="20" y="110" fill="#f80" font-size="11" font-family="monospace">2. Update metadata pointer</text>
+  <text x="30" y="130" fill="#555" font-size="10" font-family="monospace">btree: block 100 &rarr; new location</text>
+  <text x="30" y="145" fill="#555" font-size="10" font-family="monospace">snapshot keeps old pointer</text>
+
+  <text x="20" y="175" fill="#4a4" font-size="11" font-family="monospace">No read of old data needed</text>
+  <text x="20" y="195" fill="#4a4" font-size="11" font-family="monospace">No per-write flush</text>
+  <text x="20" y="215" fill="#4a4" font-size="11" font-family="monospace" font-weight="bold">Commit batched (~1s), not per-write</text>
+</svg>
+</div>
 
 <div id="viz-snap" class="viz-wrap"></div>
 
@@ -164,6 +248,46 @@ footer { margin-top: 60px; padding: 24px 0; border-top: 1px solid #222; color: v
 <h2>Experiment 3: ZFS vs Btrfs &mdash; COW Filesystems</h2>
 
 <p>Both ZFS and Btrfs are copy-on-write filesystems. Every write goes to a new location, and metadata trees are updated with new pointers. But the implementation details lead to very different I/O patterns.</p>
+
+<div class="diagram">
+<svg width="340" height="210" viewBox="0 0 340 210" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <text x="170" y="18" text-anchor="middle" fill="#888" font-size="12" font-family="monospace" font-weight="bold">ZFS (recordsize=128KB)</text>
+  <text x="20" y="45" fill="#555" font-size="10" font-family="monospace">App writes 4KB to a 128KB record:</text>
+
+  <rect x="20" y="55" width="130" height="24" rx="3" fill="#1a1a1a" stroke="#555" stroke-width="1"/>
+  <text x="85" y="71" text-anchor="middle" fill="#555" font-size="10" font-family="monospace">record (128KB)</text>
+  <rect x="20" y="55" width="4" height="24" rx="1" fill="#0af"/>
+
+  <text x="170" y="71" fill="#f50" font-size="10" font-family="monospace">&rarr; COW entire 128KB</text>
+
+  <text x="20" y="105" fill="#555" font-size="10" font-family="monospace">Then update Merkle tree upward:</text>
+  <text x="30" y="120" fill="#f50" font-size="10" font-family="monospace">data block &rarr; indirect block &rarr; dnode &rarr; uberblock</text>
+
+  <text x="20" y="145" fill="#555" font-size="10" font-family="monospace">All batched into TXG (~5s), written via ARC</text>
+  <text x="20" y="160" fill="#555" font-size="10" font-family="monospace">O_DIRECT ignored (goes through ARC anyway)</text>
+
+  <text x="20" y="185" fill="#f44" font-size="11" font-family="monospace" font-weight="bold">4KB write &rarr; 128KB physical = 32x amplification</text>
+  <text x="20" y="200" fill="#f50" font-size="10" font-family="monospace">+ metadata tree updates = ~23x total</text>
+</svg>
+
+<svg width="340" height="210" viewBox="0 0 340 210" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <text x="170" y="18" text-anchor="middle" fill="#888" font-size="12" font-family="monospace" font-weight="bold">Btrfs (extent-based)</text>
+  <text x="20" y="45" fill="#555" font-size="10" font-family="monospace">App writes 4KB:</text>
+
+  <rect x="20" y="55" width="16" height="24" rx="3" fill="#1a2a3a" stroke="#0af" stroke-width="1"/>
+  <text x="28" y="71" text-anchor="middle" fill="#0af" font-size="9" font-family="monospace">4K</text>
+  <text x="50" y="71" fill="#4a4" font-size="10" font-family="monospace">&rarr; new 4KB extent at next free block</text>
+
+  <text x="20" y="105" fill="#555" font-size="10" font-family="monospace">Metadata update:</text>
+  <text x="30" y="120" fill="#f80" font-size="10" font-family="monospace">extent tree (where is this extent?)</text>
+  <text x="30" y="135" fill="#f80" font-size="10" font-family="monospace">checksum tree (crc32c of data)</text>
+
+  <text x="20" y="160" fill="#555" font-size="10" font-family="monospace">Allocator assigns blocks sequentially</text>
+  <text x="20" y="175" fill="#555" font-size="10" font-family="monospace">Freed blocks reused after commit (~30s)</text>
+
+  <text x="20" y="200" fill="#4a4" font-size="11" font-family="monospace" font-weight="bold">4KB write &rarr; 4KB physical = ~1.0x</text>
+</svg>
+</div>
 
 <div id="viz-cowfs" class="viz-wrap"></div>
 
