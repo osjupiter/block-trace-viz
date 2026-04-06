@@ -157,6 +157,10 @@ footer { margin-top: 60px; padding: 24px 0; border-top: 1px solid #222; color: v
 </svg>
 </div>
 
+<p><strong>dm-linear</strong> is the simplest device-mapper target: it adds a fixed offset to the sector address and passes the I/O straight to the physical device. No lookup, no metadata, no overhead. A 4KB write becomes exactly one 4KB write on disk.</p>
+
+<p><strong>dm-thin</strong> adds a layer of indirection. Each write triggers a btree lookup to find the physical block. If the block is already mapped, it's remapped directly (fast path). If not, a new block is allocated from the pool's space map, and both the btree and space map are updated. These metadata changes are batched and committed to disk roughly every second &mdash; during the commit (~50-100ms), a write lock blocks all new I/O from performing lookups.</p>
+
 <div id="viz-basic" class="viz-wrap"></div>
 
 <table>
@@ -223,6 +227,10 @@ footer { margin-top: 60px; padding: 24px 0; border-top: 1px solid #222; color: v
   <text x="20" y="215" fill="#4a4" font-size="11" font-family="monospace" font-weight="bold">Commit batched (~1s), not per-write</text>
 </svg>
 </div>
+
+<p><strong>dm-snapshot (COW)</strong> must preserve the old data before overwriting it. For each write, it reads the old block, copies it to a COW area, flushes to ensure the copy is persisted, updates the mapping table, flushes again, and only then writes the new data. Two flushes per write, each ~1ms, making this a 6-step serial process.</p>
+
+<p><strong>dm-thin (ROW)</strong> avoids all of this. Since it already uses indirect block mapping, a snapshot just freezes the current metadata pointers. New writes go to freshly allocated blocks with updated pointers &mdash; the old blocks remain untouched for the snapshot. No read of old data, no copy, no per-write flush. Metadata is committed in batches as before.</p>
 
 <div id="viz-snap" class="viz-wrap"></div>
 
@@ -324,6 +332,10 @@ footer { margin-top: 60px; padding: 24px 0; border-top: 1px solid #222; color: v
   <text x="190" y="228" text-anchor="middle" fill="#4a4" font-size="11" font-family="monospace" font-weight="bold">4KB write &rarr; 4KB physical = ~1.0x amplification</text>
 </svg>
 </div>
+
+<p><strong>ZFS</strong> organizes data in fixed-size records (default 128KB). When you write 4KB, ZFS must COW the entire 128KB record to a new location &mdash; a 32x amplification at the data level alone. It also updates a Merkle-like tree of block pointers (indirect blocks, dnodes, uberblock), all COW'd as well. Writes are cached in the ARC (ignoring O_DIRECT) and flushed in Transaction Groups (TXGs) every ~5 seconds as large sequential batches spread across the disk's metaslabs.</p>
+
+<p><strong>Btrfs</strong> uses variable-size extents. A 4KB write allocates exactly a 4KB extent at the next free position in the block group. The old extent is freed (or kept if a snapshot references it). Metadata updates (extent tree + checksum tree) are COW'd separately as 16KB blocks. The allocator advances sequentially through the block group, producing a compact, nearly sequential physical write pattern with ~1.0x amplification.</p>
 
 <div id="viz-cowfs" class="viz-wrap"></div>
 
