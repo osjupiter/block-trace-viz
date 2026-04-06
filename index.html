@@ -177,7 +177,7 @@ footer { margin-top: 60px; padding: 24px 0; border-top: 1px solid #222; color: v
 <!-- ============================================================ -->
 <h2>Experiment 2: LVM Snapshot &mdash; COW vs ROW</h2>
 
-<p>What happens when you take a snapshot and keep writing? When you snapshot a regular (linear) LV, LVM uses <strong>dm-snapshot</strong> &mdash; a kernel module that intercepts writes and performs <strong>Copy-on-Write</strong>: before overwriting a block, it reads the old data and copies it to a separate COW area. Thin LVs handle snapshots differently with <strong>Redirect-on-Write (ROW)</strong>: new data simply goes to a new location, and the metadata pointer is updated.</p>
+<p>What happens when you take a snapshot and keep writing? When you snapshot a regular (linear) LV, LVM uses <strong>dm-snapshot</strong> &mdash; a kernel module that intercepts writes and performs <strong>Copy-on-Write (COW)</strong>: before overwriting a block, it reads the old data and copies it to a separate area. Thin LVs handle snapshots differently with <strong>Redirect-on-Write (ROW)</strong>: instead of copying old data, new data is written to a fresh location and the metadata pointer is updated to point there.</p>
 
 <div class="diagram">
 <svg width="340" height="230" viewBox="0 0 340 230" fill="none" xmlns="http://www.w3.org/2000/svg">
