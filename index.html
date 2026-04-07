@@ -270,6 +270,8 @@ footer { margin-top: 60px; padding: 24px 0; border-top: 1px solid #222; color: v
 
 <p>dm-thin tells a different story. Without fsync, snapshots barely matter (10,900 &rarr; 10,100 IOPS). But with fsync, thin drops to <strong>290 IOPS</strong> &mdash; even slower than dm-snapshot (315). This is because each fsync forces a full dm-thin metadata transaction commit with 3 flushes, compared to dm-snapshot's 2 flushes per COW.</p>
 
+<p>The overarching pattern: <strong>any configuration that triggers a device flush drops below 1,000 IOPS on this SSD.</strong> The flush latency (~1ms on consumer NVMe) is the great equalizer &mdash; no matter how clever the storage stack, you can't write faster than the device can flush. The dramatic differences in the experiments above (17k vs 400 IOPS) are largely about <em>which configurations flush on every write</em> versus which ones batch and defer.</p>
+
 <p>(Note: these flush latencies are not a QEMU artifact &mdash; the same test on the host NVMe SSD shows ~1.1ms flush latency, typical for consumer TLC/QLC SSDs.)</p>
 
 <p>Thin snapshots use <strong>Redirect-On-Write (ROW)</strong> &mdash; instead of copying old data, new data goes to a fresh location and the metadata pointer is updated. However, look closely at the thin panel after the snapshot: there are <strong>green dots (reads)</strong> appearing. dm-thin's chunk size is 64KB, but fio writes 4KB. When a 4KB write hits a shared 64KB chunk, dm-thin must read the entire chunk, copy it to a new location, then apply the 4KB change &mdash; effectively COW at the chunk level. If the chunk size matched the write size (e.g. <code>lvcreate -T ... -c 4k</code>), these reads would disappear entirely.</p>
