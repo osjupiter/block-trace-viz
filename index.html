@@ -260,11 +260,15 @@ footer { margin-top: 60px; padding: 24px 0; border-top: 1px solid #222; color: v
 
 <table>
 <tr><th></th><th>Without fsync</th><th>With fsync</th></tr>
-<tr><td>Linear (no snapshot)</td><td class="num">~17,900 IOPS</td><td class="num">806 IOPS</td></tr>
+<tr><td>Linear (no snapshot)</td><td class="num">17,900 IOPS</td><td class="num">806 IOPS</td></tr>
 <tr><td>Linear + Snapshot</td><td class="num"><strong>422 IOPS</strong></td><td class="num">315 IOPS</td></tr>
+<tr><td>Thin (no snapshot)</td><td class="num">10,900 IOPS</td><td class="num">784 IOPS</td></tr>
+<tr><td>Thin + Snapshot</td><td class="num">10,100 IOPS</td><td class="num"><strong>290 IOPS</strong></td></tr>
 </table>
 
-<p>Two things become clear from this table. First, adding fsync to plain linear drops IOPS from 17,900 to 806 &mdash; a 22x penalty from flush alone. This shows how much the "before snapshot" performance relies on the device's volatile write cache. Second, adding fsync to the snapshot case only drops from 422 to 315 (1.3x) &mdash; because dm-snapshot is already flushing on every write. The remaining 2.6x gap between "Linear+fsync" (806) and "Snapshot+fsync" (315) is the pure COW overhead: reading the old block, copying it, and an extra flush for the mapping table.</p>
+<p>Several things become clear from this table. Adding fsync to plain linear drops IOPS from 17,900 to 806 (22x) &mdash; this is purely the cost of flushing the device cache on every write. Adding fsync to dm-snapshot barely changes anything (422 &rarr; 315, 1.3x), because it's already flushing on every write. Comparing with fsync (which levels the playing field), the snapshot COW overhead is 806 &rarr; 315 = 2.6x &mdash; the cost of reading the old block, copying it, and writing the mapping table.</p>
+
+<p>dm-thin tells a different story. Without fsync, snapshots barely matter (10,900 &rarr; 10,100 IOPS). But with fsync, thin drops to <strong>290 IOPS</strong> &mdash; even slower than dm-snapshot (315). This is because each fsync forces a full dm-thin metadata transaction commit with 3 flushes, compared to dm-snapshot's 2 flushes per COW.</p>
 
 <p>(Note: these flush latencies are not a QEMU artifact &mdash; the same test on the host NVMe SSD shows ~1.1ms flush latency, typical for consumer TLC/QLC SSDs.)</p>
 
